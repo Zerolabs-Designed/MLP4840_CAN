@@ -1,153 +1,172 @@
-﻿# BMS CAN Test Tool (SLCAN over COM, Windows)
+﻿# MLP4840_CAN — BMS CAN Test Tool (SLCAN over COM, Windows)
 
-This project is a **Windows-based CAN test and validation tool** for a Battery Management System (BMS) using:
+This project is a Windows-based CAN test/validation script for a Battery Management System (BMS). It talks to a USB CAN adapter running **SLCAN (Lawicel-compatible)** firmware via a Windows **COM** port.
 
-- **SLCAN (Lawicel-compatible) over COM port**
-- **11-bit CAN identifiers**
-- **500 kbps CAN bitrate**
-- **CRC16 (polynomial `0xA001`, Modbus-style)**
+## Quick Summary
 
-The goal is to **replicate exactly what Cangaroo does**, but in a scriptable, repeatable way suitable for:
-- protocol validation
-- reverse engineering
-- regression testing
-- future automation or emulation
+- Transport: Serial (COM port) to SLCAN adapter (e.g. USB CDC/UART)
+- CAN: 11-bit IDs @ 500 kbps
+- Query pattern: transmit `0x5A` (padded to DLC=8 by default)
+- Reply format: 8 bytes total = 6-byte payload + CRC16
+- CRC16: poly `0xA001`, init `0xFFFF` (Modbus-style), computed over bytes 0–5
 
----
+## Files
 
-## System Overview
+- `test.py`: main test harness
 
+## System Topology
+
+```text
 Windows PC
-|
-| COM Port (USB CDC / UART, e.g. 115200 baud)
-|
-USB-CAN Adapter (SLCAN firmware)
-|
-| CAN @ 500 kbps, 11-bit ID
-|
+  │
+  │  Serial / COM port (e.g. 115200 baud)
+  │
+USB↔CAN Adapter (SLCAN firmware)
+  │
+  │  CAN @ 500 kbps, 11-bit IDs
+  │
 BMS
+```
 
-ID : 0x100
-DATA : 5A 00 00 00 00 00 00 00
+Example TX intent:
 
+- CAN ID: `0x100`
+- Data (DLC=8): `5A 00 00 00 00 00 00 00`
 
-> Some BMS accept only DLC=1 (`0x5A`), others require DLC=8 padded.
-> This tool supports both.
+Note:
+- Some BMS accept DLC=1 (`5A`) only.
+- Some require DLC=8 with padding.
+- `test.py` currently defaults to DLC=8.
 
----
+## Response Frame Format
 
-### Response Frame Format
-- DLC = 8
-- Byte layout:
-
-Byte 0–5 : Payload
-Byte 6 : CRC16 High Byte
-Byte 7 : CRC16 Low Byte
-
-
----
+- DLC: 8
+- Layout:
+  - Bytes 0–5: payload
+  - Byte 6: CRC16 high byte
+  - Byte 7: CRC16 low byte
 
 ## CRC16 Definition
 
 - Polynomial: `0xA001`
 - Initial value: `0xFFFF`
-- Algorithm: reflected / Modbus-style
-- Calculated over **Byte 0–5**
-- Transmitted as **[CRC_H][CRC_L]**
+- Reflected / Modbus-style
+- Calculated over bytes 0–5
+- Transmitted as `[CRC_H][CRC_L]`
 
-C reference implementation:
-```c
-uint16_t crc = 0xFFFF;
-crc ^= byte;
-crc = (crc >> 1) ^ 0xA001; // if LSB set
+## Decoded CAN Messages
 
-Decoded CAN Messages
-CAN ID 0x100
+### CAN ID `0x100`
 
-| Bytes | Description              | Scaling |
-| ----- | ------------------------ | ------- |
-| 0–1   | Total Voltage (U16)      | 10 mV   |
-| 2–3   | Current (S16)            | 10 mA   |
-| 4–5   | Remaining Capacity (U16) | 10 mAh  |
-| 6–7   | CRC16                    | —       |
+| Bytes | Field | Type | Scaling |
+|---|---|---|---|
+| 0–1 | Total Voltage | U16 | 10 mV |
+| 2–3 | Current | S16 | 10 mA |
+| 4–5 | Remaining Capacity | U16 | 10 mAh |
+| 6–7 | CRC16 | — | — |
 
-Voltage = raw * 0.01 V
-Current = raw * 0.01 A
-Capacity = raw * 0.01 Ah
+Conversions used by `test.py`:
 
-CAN ID 0x101
+- Voltage (V) = `raw * 0.01`
+- Current (A) = `raw * 0.01`
+- Capacity (Ah) = `raw * 0.01`
 
-| Bytes | Description   | Scaling |
-| ----- | ------------- | ------- |
-| 0–1   | Full Capacity | 10 mAh  |
-| 2–3   | Cycle Count   | 1       |
-| 4–5   | RSOC (%)      | 1       |
-| 6–7   | CRC16         | —       |
+### CAN ID `0x101`
 
+| Bytes | Field | Type | Scaling |
+|---|---|---|---|
+| 0–1 | Full Capacity | U16 | 10 mAh |
+| 2–3 | Cycle Count | U16 | 1 |
+| 4–5 | RSOC (%) | U16 | 1 |
+| 6–7 | CRC16 | — | — |
 
 ## Requirements
+
 ### Hardware
 
-- USB-CAN adapter running SLCAN firmware
-- Adapter appears as COMx in Windows
-- Proper CAN termination (120 Ω)
+- USB CAN adapter running SLCAN firmware
+- Adapter appears as `COMx` in Windows
+- Proper CAN termination (typically 120 Ω at each end of the bus)
 
 ### Software
 
 - Python 3.9+
-- pyserial
+- `pyserial`
 
 Install dependency:
-~ pip install pyserial
 
-### Configuration
+```powershell
+pip install pyserial
+```
 
-Edit these values in the script:
+## Configuration
 
-~ PORT = "COM6"      # Must match the COM port used by Cangaroo
-~ BAUD = 115200     # Fixed by adapter firmware
+Edit the “USER CONFIG” block at the top of `test.py`:
 
-### Important Note on Baud Rate
+- `PORT` (example: `COM6`)
+- `BAUD` (example: `115200`)
+- `CAN_SPEED_CMD` (example: `S6` for 500 kbps)
+- `QUERY_IDS`
+- `POLL_INTERVAL_S`
 
-This is NOT the CAN bitrate
-This is the serial baud rate (PC ↔ adapter)
+### Baud Rate vs CAN Bitrate
 
-Cangaroo does not expose this
-Common values:
-115200 (most common)
-230400 (some CANable clones)
+- `BAUD` is the serial speed between the PC and the SLCAN adapter.
+- `CAN_SPEED_CMD` sets the CAN bitrate on the CAN side.
 
-If Cangaroo works, Python must use the same baud.
+## SLCAN Init Sequence
 
+The script uses this typical SLCAN command flow:
 
+| Command | Meaning |
+|---|---|
+| `C` | Close CAN channel |
+| `S6` | Set CAN speed to 500 kbps |
+| `O` | Open CAN channel |
+| `t` | Send standard (11-bit) CAN frame |
 
-## SLCAN Initialization Sequence
+Example transmitted line (note the trailing `\r`):
 
-The script uses the following standard SLCAN commands:
-
-| Command | Meaning                        |
-| ------- | ------------------------------ |
-| `C`     | Close CAN channel              |
-| `S6`    | Set CAN speed to 500 kbps      |
-| `O`     | Open CAN channel               |
-| `t`     | Send standard 11-bit CAN frame |
-
-Example Transmitted Frame :
-~ t10085A00000000000000\r
+```text
+t10085A00000000000000\r
+```
 
 Meaning:
 
-~ t      -> standard frame
-~ 100    -> CAN ID (hex)
-~ 8      -> DLC
-~ 5A...  -> data
+- `t` = standard frame
+- `100` = CAN ID (hex)
+- `8` = DLC
+- `5A...` = data
 
-### Running the Tools
+## Run
 
-~ python slcan_bms_test.py
+From this folder:
 
-### Expected Output
-~ RX ID=0x100 DATA=0FA003E800640123 CRC=OK
-~ Decoded: V=40.00V  I=10.00A  RemCap=10.00Ah
+```powershell
+python test.py
+```
 
+## Expected Output (Example)
+
+```text
+RX ID=0x100 DATA=0FA003E800640123 CRC=OK (calc=0x0123 rx=0x0123)
+   Decoded(0x100): V=40.00V  I=10.00A  RemCap=10.00Ah
+```
+
+## Troubleshooting
+
+### `could not open port 'COM6': PermissionError(13, 'Access is denied.', None, 5)`
+
+This is almost always Windows reporting that the COM port is already open in another application/process.
+
+Fix:
+
+- Close any other tool that might be using the port (PlatformIO Serial Monitor, Arduino Serial Monitor, PuTTY, another Python process).
+- Confirm which port the adapter is on:
+
+```powershell
+python -m serial.tools.list_ports
+```
+
+- Unplug/replug the adapter if it’s stuck.
 
