@@ -2,7 +2,7 @@ import time
 import serial
 
 # ========= USER CONFIG =========
-PORT = "COM6"          # <-- change to your COM port
+PORT = "COM3"          # <-- change to your COM port
 BAUD = 115200          # common for SLCAN; try 230400 if needed
 CAN_SPEED_CMD = "S6"   # S6 = 500kbps (Lawicel SLCAN standard)
 QUERY_IDS = [0x100, 0x101]  # what you want to poll
